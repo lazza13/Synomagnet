@@ -1,0 +1,4 @@
+.vscode/launch.json
+synomagnet.spec
+dist/
+build/
