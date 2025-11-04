@@ -88,7 +88,7 @@ synomagnet "magnet:?xt=..."
 
 ## Create Desktop Entry
 
-To get this bin in the app view and louch gui with settings you can use .desktop file like this:
+To get this bin in the app view and launch gui with settings you can use .desktop file like this:
 
 ```
 [Desktop Entry]
