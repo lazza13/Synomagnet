@@ -36,7 +36,8 @@ need to be converted.
 
 - Python 3.8+ (if running from source)
 - [requests](https://pypi.org/project/requests/)
-- (Optional for standalone): [PyInstaller](https://www.pyinstaller.org/) 
+- (Optional for standalone): [PyInstaller](https://www.pyinstaller.org/)
+- Tkinter (apt-get install python3-tk)
 
 ## Installation
 
