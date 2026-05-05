@@ -1,5 +1,10 @@
-import os, json, requests, sys, tkinter as tk
+import os, json, requests, sys, subprocess, tkinter as tk
 from tkinter import simpledialog, messagebox
+
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+VERSION = "1.1.0"
 
 CONFIG_FILE = os.path.expanduser('~/.synomagnet.json')
 SID_FILE    = os.path.expanduser('~/.synosid')
@@ -41,15 +46,29 @@ def get_api_endpoints(base_url):
     except Exception:
         return None
 
-def login_flow(cfg, api_paths):
-    root = tk.Tk(); root.withdraw()
-    password = simpledialog.askstring("Password", "Enter your Synology password:", show="*")
+def notify(title, message, is_error=False):
+    urgency = "critical" if is_error else "normal"
+    try:
+        subprocess.run(
+            ["notify-send", "-u", urgency, title, message],
+            check=True, timeout=3
+        )
+    except Exception:
+        root = tk.Tk(); root.withdraw()
+        if is_error:
+            messagebox.showerror(title, message)
+        else:
+            messagebox.showinfo(title, message)
+        root.destroy()
+
+def login_flow(cfg, api_paths, root):
+    password = simpledialog.askstring("Password", "Enter your Synology password:", show="*", parent=root)
     if not password:
-        messagebox.showerror("Login error", "Password is required.")
+        messagebox.showerror("Login error", "Password is required.", parent=root)
         return None
-    otp = simpledialog.askstring("OTP", "Please enter your 2FA OTP:")
+    otp = simpledialog.askstring("OTP", "Please enter your 2FA OTP:", parent=root)
     if not otp:
-        messagebox.showerror("Login error", "OTP is required.")
+        messagebox.showerror("Login error", "OTP is required.", parent=root)
         return None
     payload = {
         "api": "SYNO.API.Auth",
@@ -66,10 +85,10 @@ def login_flow(cfg, api_paths):
     if resp.get('success'):
         sid = resp['data']['sid']
         save_file_secure(SID_FILE, sid)
-        messagebox.showinfo("Login", "SID obtained and saved ✅")
+        messagebox.showinfo("Login", "SID obtained and saved ✅", parent=root)
         return sid
     else:
-        messagebox.showerror("Login error", json.dumps(resp))
+        messagebox.showerror("Login error", json.dumps(resp), parent=root)
         return None
 
 def load_config():
@@ -94,12 +113,12 @@ def check_sid(cfg, sid, api_paths):
     except Exception:
         return False
 
-def ensure_sid(cfg, api_paths):
+def ensure_sid(cfg, api_paths, root):
     sid = read_file(SID_FILE)
     if sid and check_sid(cfg, sid, api_paths):
         return sid
     else:
-        return login_flow(cfg, api_paths)
+        return login_flow(cfg, api_paths, root)
 
 def send_magnet(cfg, magnet, sid, api_paths, dest):
     url = cfg['server'].rstrip('/') + '/webapi/' + api_paths['SYNO.DownloadStation.Task']
@@ -119,11 +138,11 @@ def send_magnet(cfg, magnet, sid, api_paths, dest):
         error_str = ERROR_MAP.get(code, f"Unknown error (code {code})")
         return False, error_str
 
-def ask_destination(cfg):
-    root = tk.Tk(); root.withdraw()
+def ask_destination(cfg, root):
     answer = messagebox.askquestion(
         "Download Destination",
-        "Do you want to use the conversion folder?"
+        "Do you want to use the conversion folder?",
+        parent=root
     )
     return cfg.get("conversion_dir") if answer == "yes" else cfg.get("download_dir")
 
@@ -154,7 +173,6 @@ def gui_settings():
         ent = tk.Entry(frm, textvariable=var)
         ent.grid(row=i, column=1, sticky="ew", padx=(0, 8), pady=4)
 
-    # Responsive columns
     frm.grid_columnconfigure(0, minsize=120, weight=0)
     frm.grid_columnconfigure(1, weight=1)
 
@@ -162,9 +180,9 @@ def gui_settings():
         server_v = vars_[0].get()
         paths = get_api_endpoints(server_v)
         if paths:
-            messagebox.showinfo("API", "API endpoints successfully discovered!")
+            messagebox.showinfo("API", "API endpoints successfully discovered!", parent=root)
         else:
-            messagebox.showerror("Error", "Unable to get endpoints, check your NAS URL and its status.")
+            messagebox.showerror("Error", "Unable to get endpoints, check your NAS URL and its status.", parent=root)
 
     def save_all():
         c = {
@@ -175,11 +193,11 @@ def gui_settings():
         }
         paths = get_api_endpoints(c['server'])
         if not paths or "SYNO.API.Auth" not in paths or "SYNO.DownloadStation.Task" not in paths:
-            messagebox.showerror("API", "DownloadStation and/or Auth endpoints not found! Check your NAS URL and Download Station status.")
+            messagebox.showerror("API", "DownloadStation and/or Auth endpoints not found! Check your NAS URL and Download Station status.", parent=root)
             return
         c["api_paths"] = paths
         save_config(c)
-        messagebox.showinfo("Saved", "Configuration and endpoint mapping saved ✅")
+        messagebox.showinfo("Saved", "Configuration and endpoint mapping saved ✅", parent=root)
         root.quit()
 
     btn_frm = tk.Frame(frm)
@@ -198,8 +216,22 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--settings", action="store_true")
+    parser.add_argument("--logout", action="store_true", help="Clear saved SID to force re-login")
+    parser.add_argument("--version", action="store_true", help="Show version and exit")
     parser.add_argument("magnet", nargs='?', help="Magnet link")
     args = parser.parse_args()
+
+    if args.version:
+        print(f"synomagnet v{VERSION}")
+        return
+
+    if args.logout:
+        if os.path.exists(SID_FILE):
+            os.remove(SID_FILE)
+            print("SID removed. Next run will prompt for login.")
+        else:
+            print("No SID file found.")
+        return
 
     if args.settings:
         gui_settings()
@@ -211,17 +243,26 @@ def main():
             print("No config found! Run 'synomagnet --settings' and let the app discover the API.")
             return
         api_paths = cfg['api_paths']
-        sid = ensure_sid(cfg, api_paths)
-        dest = ask_destination(cfg)
+
+        root = tk.Tk()
+        root.withdraw()
+
+        sid = ensure_sid(cfg, api_paths, root)
+        if not sid:
+            root.destroy()
+            return
+
+        dest = ask_destination(cfg, root)
+        root.destroy()
+
         ok, error_str = send_magnet(cfg, args.magnet, sid, api_paths, dest)
-        root = tk.Tk(); root.withdraw()
         if ok:
-            messagebox.showinfo("OK", f"Magnet sent to Download Station!\nFolder: {dest}")
+            notify("Synomagnet", f"Magnet sent!\nFolder: {dest}")
         else:
-            messagebox.showerror("Error", error_str)
+            notify("Synomagnet", error_str, is_error=True)
         return
 
-    print("Usage:\n  synomagnet --settings   (configure)\n  synomagnet magnet:?xt=...  (start download)")
+    print(f"synomagnet v{VERSION}\nUsage:\n  synomagnet --settings   (configure)\n  synomagnet --logout     (clear session)\n  synomagnet magnet:?xt=...  (start download)")
 
 if __name__ == "__main__":
     main()
